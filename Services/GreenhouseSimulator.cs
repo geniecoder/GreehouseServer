@@ -98,7 +98,8 @@ public class GreenhouseSimulator
                 Version = Version,
                 Timestamp = DateTime.UtcNow,
                 GreenhouseId = GreenhouseId,
-                Event = anomaly
+                Event = anomaly,
+                Reading = _current
             });
         }
 
