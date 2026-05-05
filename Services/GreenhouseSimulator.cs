@@ -9,7 +9,21 @@ public class GreenhouseSimulator
     private const int Version = 3;
     private const string GreenhouseId = "north-glasshouse-block-a";
 
-    private long _seq = 44800;
+    // Configuration for anomaly event patterns
+    private const int ReadingsBetweenEvents = 5; // Number of reading_delta messages before triggering an event
+    private readonly string[] _eventSequence = { "co2", "temperature", "humidity" }; // Order of events to trigger
+    private int _currentEventIndex = 0;
+    private int _readingsSinceLastEvent = 0;
+
+    // Sensor ranges
+    private const double TemperatureMin = 18;
+    private const double TemperatureMax = 28;
+    private const double HumidityMin = 45;
+    private const double HumidityMax = 75;
+    private const int Co2Min = 350;
+    private const int Co2Max = 900;
+
+    private long _seq = 101;
 
     private SensorReading _current = new()
     {
@@ -38,8 +52,14 @@ public class GreenhouseSimulator
             Status = GetStatus(),
             Summary = GetSummary(_current),
             Current = _current,
-            History = _readingHistory.TakeLast(100).ToList(),
-            Anomalies = _anomalyHistory.TakeLast(50).ToList()
+            History = _readingHistory.TakeLast(20).ToList(),
+            Anomalies = _anomalyHistory.TakeLast(7).ToList(),
+            Ranges = new SensorRanges
+            {
+                Temperature = new SensorRange { Min = TemperatureMin, Max = TemperatureMax },
+                Humidity = new SensorRange { Min = HumidityMin, Max = HumidityMax },
+                Co2 = new SensorRange { Min = Co2Min, Max = Co2Max }
+            }
         };
     }
 
@@ -77,30 +97,57 @@ public class GreenhouseSimulator
             Summary = GetSummary(_current)
         });
 
-        var anomaly = DetectAnomaly(_current);
+        // Increment counter for readings since last event
+        _readingsSinceLastEvent++;
 
-        if (anomaly != null)
+        // Check if we should trigger the next event in sequence
+        if (_readingsSinceLastEvent >= ReadingsBetweenEvents)
         {
-            anomaly.Seq = _seq;
-            anomaly.Timestamp = DateTime.UtcNow;
-
-            _anomalyHistory.Add(anomaly);
-
-            if (_anomalyHistory.Count > 200)
+            var nextSensorType = _eventSequence[_currentEventIndex];
+            
+            // Force reading to have anomalous value matching the event condition
+            switch (nextSensorType)
             {
-                _anomalyHistory.RemoveAt(0);
+                case "co2":
+                    _current.Co2 = _random.Next(910, 1000); // Above warning threshold
+                    break;
+                case "temperature":
+                    _current.Temperature = Math.Round(RandomDelta(29, 32), 1); // Above warning threshold
+                    break;
+                case "humidity":
+                    _current.Humidity = Math.Round(RandomDelta(30, 39), 1); // Below warning threshold
+                    break;
             }
+            
+            var anomaly = DetectAnomalyByType(_current, nextSensorType);
 
-            messages.Add(new StreamMessage
+            if (anomaly != null)
             {
-                Type = "anomaly_event",
-                Seq = _seq,
-                Version = Version,
-                Timestamp = DateTime.UtcNow,
-                GreenhouseId = GreenhouseId,
-                Event = anomaly,
-                Reading = _current
-            });
+                anomaly.Seq = _seq;
+                anomaly.Timestamp = DateTime.UtcNow;
+
+                _anomalyHistory.Add(anomaly);
+
+                if (_anomalyHistory.Count > 200)
+                {
+                    _anomalyHistory.RemoveAt(0);
+                }
+
+                messages.Add(new StreamMessage
+                {
+                    Type = "anomaly_event",
+                    Seq = _seq,
+                    Version = Version,
+                    Timestamp = DateTime.UtcNow,
+                    GreenhouseId = GreenhouseId,
+                    Event = anomaly,
+                    Reading = _current
+                });
+
+                // Move to next event in sequence
+                _currentEventIndex = (_currentEventIndex + 1) % _eventSequence.Length;
+                _readingsSinceLastEvent = 0;
+            }
         }
 
         return messages;
@@ -108,23 +155,23 @@ public class GreenhouseSimulator
 
     private SensorReading CreateNextReading()
     {
-        var temperature = Clamp(_current.Temperature + RandomDelta(-0.4, 0.4), 18, 34);
-        var humidity = Clamp(_current.Humidity + RandomDelta(-1.5, 1.5), 30, 85);
-        var co2 = (int)Clamp(_current.Co2 + RandomDelta(-35, 55), 350, 1250);
+        var temperature = Clamp(_current.Temperature + RandomDelta(-0.4, 0.4), TemperatureMin, TemperatureMax);
+        var humidity = Clamp(_current.Humidity + RandomDelta(-1.5, 1.5), HumidityMin, HumidityMax);
+        var co2 = (int)Clamp(_current.Co2 + RandomDelta(-35, 55), Co2Min, Co2Max);
 
         if (_random.NextDouble() < 0.12)
         {
-            co2 = _random.Next(920, 1150);
+            co2 = _random.Next(800, 900);
         }
 
         if (_random.NextDouble() < 0.06)
         {
-            temperature = RandomDelta(29, 33);
+            temperature = RandomDelta(26, 28);
         }
 
         if (_random.NextDouble() < 0.06)
         {
-            humidity = RandomDelta(30, 38);
+            humidity = RandomDelta(45, 55);
         }
 
         return new SensorReading
@@ -135,45 +182,43 @@ public class GreenhouseSimulator
         };
     }
 
-    private AnomalyEvent? DetectAnomaly(SensorReading reading)
+    private AnomalyEvent? DetectAnomalyByType(SensorReading reading, string sensorType)
     {
-        if (reading.Co2 > 900)
+        switch (sensorType)
         {
-            return new AnomalyEvent
-            {
-                Sensor = "co2",
-                Level = reading.Co2 > 1050 ? "critical" : "warning",
-                Value = reading.Co2,
-                Reason = "CO2 spike z=3.4",
-                Message = "CO2 above comfort band — airflow check suggested"
-            };
-        }
+            case "co2":
+                return new AnomalyEvent
+                {
+                    Sensor = "co2",
+                    Level = "warning",
+                    Value = reading.Co2,
+                    Reason = "CO2 spike z=3.4",
+                    Message = "CO2 above comfort band — airflow check suggested"
+                };
 
-        if (reading.Temperature > 28)
-        {
-            return new AnomalyEvent
-            {
-                Sensor = "temperature",
-                Level = reading.Temperature > 31 ? "critical" : "warning",
-                Value = reading.Temperature,
-                Reason = "Temperature outlier",
-                Message = "Temperature above safe threshold"
-            };
-        }
+            case "temperature":
+                return new AnomalyEvent
+                {
+                    Sensor = "temperature",
+                    Level = "warning",
+                    Value = reading.Temperature,
+                    Reason = "Temperature outlier",
+                    Message = "Temperature above safe threshold"
+                };
 
-        if (reading.Humidity < 40)
-        {
-            return new AnomalyEvent
-            {
-                Sensor = "humidity",
-                Level = "warning",
-                Value = reading.Humidity,
-                Reason = "Humidity dip",
-                Message = "Humidity below comfort band"
-            };
-        }
+            case "humidity":
+                return new AnomalyEvent
+                {
+                    Sensor = "humidity",
+                    Level = "warning",
+                    Value = reading.Humidity,
+                    Reason = "Humidity dip",
+                    Message = "Humidity below comfort band"
+                };
 
-        return null;
+            default:
+                return null;
+        }
     }
 
     private string GetStatus()

@@ -12,6 +12,20 @@ public class SnapshotResponse
     public SensorReading Current { get; set; } = new();
     public List<SensorHistoryItem> History { get; set; } = new();
     public List<AnomalyEvent> Anomalies { get; set; } = new();
+    public SensorRanges Ranges { get; set; } = new();
+}
+
+public class SensorRanges
+{
+    public SensorRange Temperature { get; set; } = new();
+    public SensorRange Humidity { get; set; } = new();
+    public SensorRange Co2 { get; set; } = new();
+}
+
+public class SensorRange
+{
+    public double Min { get; set; }
+    public double Max { get; set; }
 }
 
 public class SensorHistoryItem
