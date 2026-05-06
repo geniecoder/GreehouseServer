@@ -51,10 +51,37 @@ app.Map("/ws", async (HttpContext context, GreenhouseSimulator simulator) =>
             );
         }
 
-        await Task.Delay(1000);
+        await Task.Delay(3000);
     }
 
     Console.WriteLine("Client disconnected");
+});
+
+app.MapPost("/api/upload-image", async (HttpContext context) =>
+{
+    try
+    {
+        var form = await context.Request.ReadFormAsync();
+        var file = form.Files.FirstOrDefault();
+
+        if (file == null || file.Length == 0)
+        {
+            return Results.BadRequest(new { success = false, message = "No file uploaded" });
+        }
+
+        // Image received successfully (no need to store)
+        return Results.Ok(new
+        {
+            success = true,
+            message = "Image uploaded successfully",
+            fileName = file.FileName,
+            fileSize = file.Length
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { success = false, message = ex.Message });
+    }
 });
 
 app.Run("http://0.0.0.0:5050");
